@@ -1,0 +1,342 @@
+---
+title: "ChIP-seq Visualization with trackplot"
+subtitle: "ENCODE H1 hESC Data — OCT4/NANOG Locus & Genome-Wide Profiles"
+author: "Danya Hassan"
+date: today
+format:
+  html:
+    toc: true
+    toc-float: true
+    toc-depth: 3
+    theme: flatly
+    highlight-style: tango
+    code-fold: show
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+---
+
+## 1. Overview
+
+This notebook demonstrates genome-scale ChIP-seq visualization using the
+[**trackplot**](https://github.com/PoisonAlien/trackplot) R package, applied
+to publicly available ENCODE data from H1 human embryonic stem cells (hESCs).
+
+Two complementary visualization types are covered:
+
+- **Locus (IGV-style) track plots** — signal tracks, peak annotations, and
+  ChromHMM chromatin state tracks at the OCT4/POU5F1 locus
+- **Metagene profile plots** — genome-wide average signal around RefSeq
+  transcription start sites (TSS)
+
+**Data source:** [ENCODE Project](https://www.encodeproject.org/) — H1 hESC
+ChIP-seq experiments for OCT4, NANOG, H3K27ac, H3K4me1, H3K4me3, CTCF,
+H2A.Z, and RNA Pol II.
+
+---
+
+## 2. Environment Setup
+
+### 2.1 Verify bwtool is Accessible
+
+trackplot calls `bwtool` as a system command to extract signal from bigWig
+files. This block confirms it is on the R session's PATH before proceeding.
+
+```{r verify-bwtool}
+# If running outside Docker, manually add bwtool to R's PATH:
+# Sys.setenv(PATH = paste(Sys.getenv("PATH"), "/home/<user>/bin", sep = ":"))
+
+bwtool_path <- Sys.which("bwtool")
+
+if (nchar(bwtool_path) == 0) {
+  stop(
+    "bwtool not found on PATH.\n",
+    "Add it with: Sys.setenv(PATH = paste(Sys.getenv('PATH'), '/path/to/bin', sep = ':'))\n",
+    "See README for full installation instructions."
+  )
+} else {
+  cat("bwtool found at:", bwtool_path, "\n")
+  system("bwtool 2>&1 | head -2")
+}
+```
+
+### 2.2 Load Libraries
+
+```{r libraries}
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Install trackplot if not already available
+if (!requireNamespace("trackplot", quietly = TRUE)) {
+  remotes::install_github("poisonalien/trackplot")
+}
+library(trackplot)
+```
+
+---
+
+## 3. Configuration
+
+```{r config}
+# ── Edit paths here ──────────────────────────────────────────────────────────
+WORKDIR <- "~/trackplot_tutorial"   # directory containing bigWig and bed files
+BUILD   <- "hg19"                   # genome assembly used for ENCODE H1 data
+# ─────────────────────────────────────────────────────────────────────────────
+
+setwd(WORKDIR)
+```
+
+---
+
+## 4. ENCODE Data Used
+
+The following ChIP-seq experiments from the H1 hESC ENCODE tier-1 cell line
+are used in this analysis. BigWig signal files and narrowPeak BED files were
+downloaded directly from the ENCODE portal.
+
+| Mark / Factor | ENCODE Accession | Type |
+|--------------|-----------------|------|
+| OCT4 (POU5F1) | ENCFF465CMT | BigWig |
+| NANOG | ENCFF996VEE | BigWig |
+| H3K27ac | — | BigWig |
+| H3K4me1 | — | BigWig |
+| H3K4me3 | — | BigWig |
+| CTCF | H1_Ctcf.bed | NarrowPeak |
+| H2A.Z | H1_H2az.bed | NarrowPeak |
+| RNA Pol II | H1_Pol2.bed | NarrowPeak |
+
+---
+
+## 5. Locus Track Plots (IGV-Style)
+
+### 5.1 Load BigWig Files
+
+```{r load-bigwigs}
+# List all bigWig files in the working directory
+bigwig_files <- list.files(pattern = "\\.bigWig$|\\.bw$")
+cat("BigWig files found:", length(bigwig_files), "\n")
+print(bigwig_files)
+
+# Build colData table linking files to genome assembly
+bigWigs <- read_coldata(bws = bigwig_files, build = BUILD)
+head(bigWigs)
+```
+
+### 5.2 Extract Signal at OCT4/POU5F1 Locus
+
+trackplot can accept either a genomic coordinate range or a gene name.
+Both approaches are shown below — they produce identical output.
+
+```{r extract-signal}
+oct4_loci <- "chr6:31125776-31144789"
+
+# Option A: extract by genomic coordinates
+t_coords <- track_extract(colData = bigWigs, loci = oct4_loci)
+
+# Option B: extract by gene name (fetches coordinates from UCSC automatically)
+t_gene <- track_extract(colData = bigWigs, gene = "POU5F1")
+
+# Use gene-based extraction for all downstream plots
+t <- t_gene
+```
+
+### 5.3 Basic Track Plot
+
+```{r basic-trackplot}
+track_plot(summary_list = t)
+```
+
+### 5.4 Custom Colors + Chromosome Ideogram
+
+```{r trackplot-ideogram}
+track_cols <- c("#d35400", "#27ae60")
+
+track_plot(
+  summary_list  = t,
+  col           = track_cols,
+  show_ideogram = TRUE
+)
+```
+
+### 5.5 Overlay All Tracks into a Single Track
+
+Overlaying tracks is useful for directly comparing signal levels between
+conditions or replicates at the same locus.
+
+```{r trackplot-overlay}
+track_plot(
+  summary_list  = t,
+  col           = track_cols,
+  show_ideogram = TRUE,
+  track_overlay = TRUE
+)
+```
+
+### 5.6 Multi-Gene View with Auto-Scaled Groups
+
+Display multiple genes in the same window with independent y-axis scaling
+per group, which is helpful when comparing factors with different signal
+dynamic ranges.
+
+```{r trackplot-multigene}
+track_plot(
+  summary_list   = t,
+  col            = track_cols,
+  show_ideogram  = TRUE,
+  genename       = c("POU5F1", "TCF19"),
+  groupAutoScale = TRUE,
+  y_min          = 0
+)
+```
+
+---
+
+## 6. NarrowPeak / BroadPeak Tracks
+
+Peak BED files can be loaded alongside bigWig signal tracks to show called
+peaks directly on the locus plot.
+
+```{r load-peaks}
+narrowPeak_files <- c(
+  "H1_Ctcf.bed",
+  "H1_H2az.bed",
+  "H1_k27ac.bed",
+  "H1_k4me1.bed",
+  "H1_k4me3.bed",
+  "H1_Nanog.bed",
+  "H1_Oct4.bed",
+  "H1_Pol2.bed"
+)
+
+# Confirm files exist before loading
+narrowPeak_files <- narrowPeak_files[file.exists(narrowPeak_files)]
+cat("Peak files found:", length(narrowPeak_files), "\n")
+
+narrowPeaks <- read_coldata(
+  narrowPeak_files,
+  build      = "hg19",
+  input_type = "peak"
+)
+```
+
+```{r extract-peaks}
+# Wider genomic window to show peak context across the OCT4/NANOG region
+oct4_region <- "chr6:30818383-31452182"   # ~633 kb window
+
+narrowPeaks_track <- track_extract(
+  colData = narrowPeaks,
+  loci    = oct4_region
+)
+```
+
+```{r plot-peaks}
+# Overlay ChromHMM chromatin state tracks from UCSC alongside peak tracks
+track_plot(
+  summary_list = narrowPeaks_track,
+  show_ideogram = TRUE,
+  ucscChromHMM  = c(
+    "wgEncodeBroadHmmH1hescHMM",   # H1 hESC chromatin states
+    "wgEncodeBroadHmmNhlfHMM"      # NHLF (lung fibroblast) for comparison
+  )
+)
+```
+
+---
+
+## 7. Metagene Profile Plots (Genome-Wide)
+
+Profile plots show the average ChIP-seq signal across all RefSeq transcripts,
+centered on the transcription start site (TSS). This provides a genome-wide
+view of how a factor distributes relative to gene bodies.
+
+### 7.1 Load BigWigs for Profile Analysis
+
+```{r load-profile-bws}
+profile_bws <- c("ENCFF465CMT.bigWig", "ENCFF996VEE.bigWig")
+
+bws <- read_coldata(
+  bws          = profile_bws,
+  sample_names = c("OCT4_rep1", "OCT4_rep2"),
+  build        = "hg38"
+)
+```
+
+### 7.2 Extract Signal Around TSS
+
+Signal is extracted in a window extending 1,500 bp upstream and downstream
+of the TSS for all RefSeq transcripts.
+
+```{r profile-extract}
+pe_refseq <- profile_extract(
+  colData       = bws,
+  ucsc_assembly = TRUE,
+  startFrom     = "start",   # anchor to TSS
+  up            = 1500,      # bp upstream of TSS
+  down          = 1500       # bp downstream of TSS
+)
+```
+
+### 7.3 Summarize and Plot
+
+```{r profile-plot}
+ps_refseq <- profile_summarize(sig_list = pe_refseq)
+profile_plot(ps_refseq)
+```
+
+---
+
+## 8. Generic Usage Template
+
+This section provides a minimal template for running trackplot on **any
+bigWig dataset** — replace file names, genome build, and locus as needed.
+
+```{r generic-template, eval=FALSE}
+# ── 1. Point to your bigWig files ────────────────────────────────────────────
+my_bws <- list.files(path = "path/to/bigwigs/", pattern = "\\.bw$", full.names = TRUE)
+
+# ── 2. Build colData (swap build for hg19, hg38, mm10, etc.) ─────────────────
+my_coldata <- read_coldata(bws = my_bws, build = "hg38")
+
+# ── 3. Extract signal at a locus or gene ─────────────────────────────────────
+my_tracks <- track_extract(colData = my_coldata, gene = "GAPDH")
+# OR by coordinates:
+# my_tracks <- track_extract(colData = my_coldata, loci = "chr1:1000000-1050000")
+
+# ── 4. Plot ───────────────────────────────────────────────────────────────────
+track_plot(
+  summary_list  = my_tracks,
+  show_ideogram = TRUE,
+  col           = c("#e74c3c", "#3498db", "#2ecc71")   # one color per track
+)
+
+# ── 5. Metagene profile (optional) ───────────────────────────────────────────
+pe  <- profile_extract(colData = my_coldata, ucsc_assembly = TRUE,
+                        startFrom = "start", up = 2000, down = 2000)
+ps  <- profile_summarize(sig_list = pe)
+profile_plot(ps)
+```
+
+---
+
+## 9. Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `bwtool not found` | `Sys.setenv(PATH = paste(Sys.getenv("PATH"), "~/bin", sep=":"))` |
+| `mysql: command not found` | Install MySQL client: `conda install -c anaconda mysql` |
+| `Error in read_coldata`: file not found | Check working directory with `getwd()` and confirm file names match exactly |
+| UCSC queries timing out | Try again — UCSC browser has rate limits; or download annotation files locally |
+| ChromHMM track names not found | Check available track names at https://genome.ucsc.edu/cgi-bin/hgTrackDb |
+
+---
+
+## 10. Session Info
+
+```{r session-info}
+sessionInfo()
+```

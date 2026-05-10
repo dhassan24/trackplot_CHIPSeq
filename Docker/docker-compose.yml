@@ -1,0 +1,72 @@
+# =============================================================================
+# docker-compose.yml — trackplot ChIP-seq Visualization Environment
+# =============================================================================
+#
+# Services:
+#   rstudio  — RStudio Server at http://localhost:8787
+#   render   — one-shot Quarto document renderer (exits after completion)
+#   r        — interactive R session in the terminal
+#
+# Usage:
+#   # Start RStudio Server (http://localhost:8787, user: rstudio, pass: rstudio)
+#   docker compose up rstudio
+#
+#   # Render the Quarto document
+#   docker compose run --rm render
+#
+#   # Launch an interactive R session
+#   docker compose run --rm r
+#
+#   # Stop and remove containers
+#   docker compose down
+# =============================================================================
+
+version: "3.9"
+
+# ── Shared configuration ──────────────────────────────────────────────────────
+x-base: &base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  volumes:
+    # Mount current directory into /workspace inside the container.
+    # Place your bigWig, BED, and peak files here before running.
+    - .:/workspace
+  working_dir: /workspace
+  environment:
+    - PASSWORD=rstudio          # RStudio Server login password
+    - ROOT=true                 # allow sudo inside container if needed
+
+# =============================================================================
+services:
+
+  # ── RStudio Server ───────────────────────────────────────────────────────────
+  # Opens a full RStudio IDE in the browser at http://localhost:8787
+  # Username: rstudio   Password: rstudio (or whatever PASSWORD is set to above)
+  rstudio:
+    <<: *base
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+    container_name: trackplot-rstudio
+
+  # ── Quarto renderer ───────────────────────────────────────────────────────────
+  # Renders trackplot_chipseq.qmd to HTML and exits.
+  # Output file will appear in the mounted ./workspace directory.
+  render:
+    <<: *base
+    command: quarto render /workspace/trackplot_chipseq.qmd --to html
+    container_name: trackplot-render
+    profiles:
+      - render   # only starts with: docker compose --profile render up
+
+  # ── Interactive R session ─────────────────────────────────────────────────────
+  # Opens an R console in the terminal. Useful for exploratory work.
+  r:
+    <<: *base
+    stdin_open: true
+    tty: true
+    command: R
+    container_name: trackplot-r
+    profiles:
+      - interactive   # only starts with: docker compose --profile interactive up
